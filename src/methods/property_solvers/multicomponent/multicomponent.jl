@@ -234,28 +234,16 @@ function bubbledew_check(model,p,T,vw,vz,w,z)
     return true
 end
 
-#generator for candidate fractions, given an initial composition, method by Pereira et al. (2010).
-function initial_candidate_fractions(n)
-
+function initial_candidate_fractions(n::AbstractVector{TT}) where TT
+    x = Vector{TT}[]
     nc = length(n)
-    x̂ = [zeros(nc) for i in 1:nc-1]
-    x̄ = [zeros(nc) for i in 1:nc-1]
 
-    for i ∈ 1:nc-1
-        x̂i = x̂[i]
-        x̄i = x̄[i]
-        x̂i[i] = n[i]/2
-        x̄i[i] = (1+n[i])/2
-        for k ∈ 1:nc-1
-            if k != i
-                x̂i[k] = (1-x̂i[i])/(nc-1)
-                x̄i[k] = (1-x̄i[i])/(nc-1)
-            end
-        end
-        x̂i[nc] = 1 - sum(x̂i)
-        x̄i[nc] = 1 - sum(x̄i)
+    for i in 1:nc-1
+        push!(x,z_pereira!(similar(n),n,i,true))
     end
-    x = vcat(x̂,x̄)
+    for i in 1:nc-1
+        push!(x,z_pereira!(similar(n),n,i,false))
+    end
     return x
 end
 
@@ -301,49 +289,6 @@ function bubbledew_pressure_ad_v(result,tup,λtup,_bubble)
     return ∂p,∂vl,∂vv,∂w
 end
 
-function bubbledew_pressure_ad_p(result,tup,λtup,_bubble,lle = false)
-    vl0,vv0 = result[2],result[3]
-    f(x,tups) = begin
-        model,T,z = tups
-        p = x[1]
-        w = @view x[2:end]
-        if _bubble
-            _x,_y = z,w
-        else
-            _x,_y = w,z
-        end
-
-        phasey = lle ? :liquid : :vapour
-
-        lnϕl,_ = modified_lnϕ(model,p,T,_x,nothing,phase = :liquid,vol0 = primalval(vl0))
-        lnϕv,_ = modified_lnϕ(model,p,T,_y,nothing,phase = phasey, vol0 = primalval(vv0))
-        
-        F1 = sum(w) - 1.0 # can exclude this restriction, but would then need additional logic to parse w (excluding one component)
-        F2 = lnϕl - lnϕv + log.(_x) - log.(_y)
-        res = vcat(F1,F2) # can probably be efficient with preallocation and @view but requires the common Dual type between tups and x, otherwise __gradients_for_root_finders will have the incorrect Dual type
-        return res
-    end
-    λp = result[1]
-    λw = result[4]
-    λmodel,λT,λz = λtup
-    ∂model,∂T,∂z = tup
-    λx = vcat(λp,λw)
-    ∂x = __gradients_for_root_finders(λx,tup,λtup,f)
-    ∂p = ∂x[1]
-    ∂w = ∂x[2:end]
-    #∂vl = volume_ad(result[2],(∂model,∂p,∂T,∂z),(λmodel,λp,λT,λz))
-    if _bubble
-        _∂x,_∂y = ∂z,∂w
-    else
-        _∂x,_∂y = ∂w,∂z
-    end
-    #∂vv = volume_ad(result[3],(∂model,∂p,∂T,∂w),(λmodel,λp,λT,λy))
-    ∂vl = volume(∂model,∂p,∂T,_∂x,phase = :liquid,vol0 = primalval(vl0))
-    phasey = lle ? :liquid : :vapour
-    ∂vv = volume(∂model,∂p,∂T,_∂y,phase = phasey,vol0 = primalval(vv0))
-    return ∂p,∂vl,∂vv,∂w
-end
-
 function bubbledew_temperature_ad_v(result,tup,λtup,_bubble)
     f(x,tups) = begin
         model,p,z = tups
@@ -370,40 +315,6 @@ function bubbledew_temperature_ad_v(result,tup,λtup,_bubble)
     ∂w = ∂x[4:end]
     return ∂T,∂vl,∂vv,∂w
 end
-
-function bubbledew_temperature_ad_p(result,tup,λtup,_bubble,lle)
-    vl0,vv0 = result[2],result[3]
-    f(x,tups) = begin
-        model,p,z = tups
-        T = x[1]
-        w = @view x[2:end]
-        if _bubble
-            _x,_y = z,w
-        else
-            _x,_y = w,z
-        end
-
-        phasey = lle ? :liquid : :vapour
-
-        lnϕl,_ = modified_lnϕ(model,p,T,_x,nothing,phase = :liquid,vol0 = primalval(vl0))
-        lnϕv,_ = modified_lnϕ(model,p,T,_y,nothing,phase = phasey, vol0 = primalval(vv0))
-        F1 = sum(w) - 1.0 # can exclude this restriction, but would then need additional logic to parse w (excluding one component)
-        F2 = lnϕl - lnϕv + log.(_x) - log.(_y)
-        vcat(F1,F2) # can probably be efficient with preallocation and @view but requires the common Dual type between tups and x, otherwise __gradients_for_root_finders will have the incorrect Dual type
-    end
-
-    λT = result[1]
-    λy = result[4]
-    λmodel,λp,λz = λtup
-    ∂model,∂p,∂z = tup
-    λx = vcat(λT,λy)
-    ∂x = __gradients_for_root_finders(λx,tup,λtup,f)
-    ∂T = ∂x[1]
-    ∂w = ∂x[2:end]
-    ∂vl = volume_ad(vl0,(∂model,∂p,∂T,∂z),(λmodel,λp,λT,λz))
-    ∂vv = volume_ad(vv0,(∂model,∂p,∂T,∂w),(λmodel,λp,λT,λy))
-    return ∂T,∂vl,∂vv,∂w
-end
  
 bubble_temperature_ad(result,tup,λtup) = bubbledew_temperature_ad_v(result,tup,λtup,true)
 dew_temperature_ad(result,tup,λtup) = bubbledew_temperature_ad_v(result,tup,λtup,false)
@@ -416,7 +327,6 @@ function zero_non_equilibria!(w,in_equilibria)
     end
     return w
 end
-
 
 function comps_in_equilibria(components,::Nothing)::Vector{Bool}
     return fill(true,length(components))
@@ -434,13 +344,18 @@ include("fugacity.jl")
 include("rachford_rice.jl")
 include("bubble_point.jl")
 include("dew_point.jl")
-include("azeotrope_point.jl")
 include("LLE_point.jl")
+include("azeotrope_point.jl")
 include("VLLE.jl")
 include("crit_mix.jl")
 include("UCEP.jl")
 include("UCST_mix.jl")
 include("flash.jl")
+
+#include("bubbledew/ChemPotQX.jl")
+#include("bubbledew/FugQX.jl")
+#include("bubbledew/ActivityQT.jl")
+
 include("krichevskii_parameter.jl")
 include("solids/sle_solubility.jl")
 include("solids/slle_solubility.jl")
